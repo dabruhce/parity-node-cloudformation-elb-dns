@@ -1,12 +1,16 @@
 # parity-node-cloudformation-elb-dns
 
-
+##AWS Cloudformation Usage
 ````text
 execute cloudformation template
-fill in: ApexDomain, SSLCertificateID, HostedZoneID, KeyName
+fill the following with information from executing account
+* ApexDomain
+* SSLCertificateID
+* HostedZoneID
+* KeyName
 
 ````
-
+##Basic Info
 ````text
 parity log: /var/log/parity.log
 parity config file: /root/.local/share/io.parity.ethereum/config.toml
@@ -15,6 +19,7 @@ gh location which built ami: https://github.com/tkntobfrk/cloudformation-ethereu
 after image above built shared image publicly
 ````
 
+##Parity RPC Usage
 ````text
 https://github.com/paritytech/parity/wiki/Basic-Usage#json-rpc-api
 
