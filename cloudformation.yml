@@ -1,0 +1,377 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Metadata:
+  License: MIT
+Description: 'AWS CloudFormation to launch parity nodes behind ELB.'
+Parameters:
+  ApexDomain:
+    Description: The top level domain
+    Type: String
+    Default: somedomain.com
+  ELBHostedZoneID:
+    Description: The ELB Hosted zone, don't change this
+    Type: String
+    Default: Z35SXDOTRQ7X7K
+  SSLCertificateID:
+    Description: The SSL Certificate ARN from certificate manager of account
+    Type: String
+    Default: arn:aws:acm:us-east-1:
+  HostedZoneID:
+    Description: The ID of the Hosted Zone for the domain from route 53 hosted zone
+    Type: String
+    Default: Z2XXXXXXXX
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.medium
+    AllowedValues: [t1.micro, t2.nano, t2.micro, t2.small, t2.medium, t2.large, m1.small,
+      m1.medium, m1.large]
+    ConstraintDescription: must be a valid EC2 instance type.
+  EthereumNetwork:
+    Description: Ethereum Network
+    Type: String
+    Default: ropsten
+    AllowedValues: [ropsten, mainnet]
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+    Default: MyKey
+  SSHLocation:
+    Description: The IP address range that can be used to SSH to the EC2 instances
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+Mappings:
+  Region2Examples:
+    us-east-1:
+      Examples: https://s3.amazonaws.com/cloudformation-examples-us-east-1
+  AWSInstanceType2Arch:
+    t1.micro:
+      Arch: PV64
+    t2.nano:
+      Arch: HVM64
+    t2.micro:
+      Arch: HVM64
+    t2.small:
+      Arch: HVM64
+    t2.medium:
+      Arch: HVM64
+  AWSInstanceType2NATArch:
+    t1.micro:
+      Arch: NATPV64
+    t2.nano:
+      Arch: NATHVM64
+    t2.micro:
+      Arch: NATHVM64
+    t2.small:
+      Arch: NATHVM64
+    t2.medium:
+      Arch: NATHVM64
+  AWSRegionArch2AMI:
+    us-east-1:
+      HVM64: ami-b67438cc
+Resources:
+  ParityGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+        Count: '1'
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: '1'
+        MinInstancesInService: '1'
+        PauseTime: PT15M
+        WaitOnResourceSignals: 'true'
+    Properties:
+      AvailabilityZones: !GetAZs ''
+      LaunchConfigurationName: !Ref 'LaunchConfig'
+      MinSize: '1'
+      MaxSize: '3'
+      LoadBalancerNames: [!Ref 'ElasticLoadBalancer']
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          full_install: [install_cfn, create_parity_config, launch_parity, verify_instance_health]
+        install_cfn:
+          files:
+            /etc/cfn/cfn-hup.conf: #detect changes in resource metadata and run user-specified actions (update running instances through the UpdateStack API)
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+              mode: "000400"
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cf-auto-reloader.conf: #actions that cfn-hup daemon calls periodically are defined in this directory (hooks.d) Files with the same name will be merged.
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfig --configsets full_install --region ${AWS::Region}
+                runas=root
+          services: #define which service should be enabled or disabled when the instance is launched
+            sysvinit:
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+                files:
+                - "/etc/cfn/cfn-hup.conf"
+                - "/etc/cfn/hooks.d/cfn-auto-reloader.conf"
+        create_parity_config:
+          files:
+            /root/.local/share/io.parity.ethereum/config.toml.example: #change to config.toml to use
+              content: !Sub |
+                [parity]
+                mode = "last"
+                mode_timeout = 300
+                mode_alarm = 3600
+                auto_update = "none"
+                release_track = "current"
+                public_node = false
+                no_download = false
+                no_consensus = false
+                no_persistent_txqueue = false
+                chain = "ropsten"
+                base_path = "$HOME/.local/share/io.parity.ethereum"
+                db_path = "$HOME/.local/share/io.parity.ethereum/chains"
+                keys_path = "$HOME/.local/share/io.parity.ethereum/keys"
+                identity = ""
+                light = false
+                [account]
+                unlock = ["0xdeadbeefcafe0000000000000000000000000000"]
+                password = ["$HOME/.safe/password.file"]
+                keys_iterations = 10240
+                [ui]
+                force = false
+                disable = false
+                port = 8180
+                interface = "127.0.0.1"
+                path = "$HOME/.local/share/io.parity.ethereum/signer"
+                [network]
+                port = 30303
+                min_peers = 25
+                max_peers = 50
+                nat = "any"
+                id = 1
+                bootnodes = []
+                discovery = true
+                warp = true
+                allow_ips = "all"
+                snapshot_peers = 0
+                max_pending_peers = 64
+                no_serve_light = false
+                reserved_only = false
+                reserved_peers = "./path_to_file"
+                [rpc]
+                disable = false
+                port = 8545
+                interface = "local"
+                cors = "null"
+                apis = ["web3", "eth", "net", "parity", "traces", "rpc", "secretstore"]
+                hosts = ["none"]
+                [websockets]
+                disable = false
+                port = 8546
+                interface = "local"
+                origins = ["none"]
+                apis = ["web3", "eth", "net", "parity", "traces", "rpc", "secretstore"]
+                hosts = ["none"]
+                [ipc]
+                disable = false
+                path = "$HOME/.local/share/io.parity.ethereum/jsonrpc.ipc"
+                apis = ["web3", "eth", "net", "parity", "parity_accounts", "personal", "traces", "rpc", "secretstore"]
+                [dapps]
+                disable = false
+                path = "$HOME/.local/share/io.parity.ethereum/dapps"
+                [secretstore]
+                disable = false
+                nodes = []
+                http_interface = "local"
+                http_port = 8082
+                interface = "local"
+                port = 8083
+                path = "$HOME/.local/share/io.parity.ethereum/secretstore"
+                [ipfs]
+                enable = false
+                port = 5001
+                interface = "local"
+                cors = "null"
+                hosts = ["none"]
+                [mining]
+                author = "0xdeadbeefcafe0000000000000000000000000001"
+                engine_signer = "0xdeadbeefcafe0000000000000000000000000001"
+                force_sealing = true
+                reseal_on_txs = "all"
+                reseal_min_period = 4000
+                reseal_max_period = 60000
+                work_queue_size = 20
+                relay_set = "cheap"
+                usd_per_tx = "0.0025"
+                usd_per_eth = "auto"
+                price_update_period = "hourly"
+                gas_floor_target = "4700000"
+                gas_cap = "6283184"
+                tx_queue_size = 8192
+                tx_queue_gas = "off"
+                tx_queue_strategy = "gas_factor"
+                tx_queue_ban_count = 1
+                tx_queue_ban_time = 180 #s
+                tx_gas_limit = "6283184"
+                tx_time_limit = 100 #ms
+                extra_data = "Parity"
+                remove_solved = false
+                notify_work = ["http://localhost:3001"]
+                refuse_service_transactions = false
+                [footprint]
+                tracing = "auto"
+                pruning = "auto"
+                pruning_history = 64
+                pruning_memory = 500
+                cache_size_db = 64
+                cache_size_blocks = 8
+                cache_size_queue = 50
+                cache_size_state = 25
+                cache_size = 128 # Overrides above caches with total size
+                fast_and_loose = false
+                db_compaction = "ssd"
+                fat_db = "auto"
+                scale_verifiers = true
+                num_verifiers = 6
+                [snapshots]
+                disable_periodic = false
+                [vm]
+                jit = false
+                [misc]
+                logging = "own_tx=trace"
+                log_file = "/var/log/parity.log"
+                color = true
+              mode: "000400"
+              owner: root
+              group: root
+        launch_parity:
+          commands:
+            RunParity:
+              command: !Join [ '', [ 'nohup /usr/local/bin/parity --chain ', !Ref 'EthereumNetwork', ' --jsonrpc-hosts all --jsonrpc-interface all --jsonrpc-apis all --snapshot-peers=25 --max-peers=10 --min-peers=25 </dev/null > /var/log/parity.log 2>&1 &' ] ]
+              #command below should work when using toml config
+              #command: !Join [ '', [ 'nohup /usr/local/bin/parity ', ' </dev/null > /var/log/parity.log 2>&1 &' ] ]
+        verify_instance_health:
+          commands:
+            ELBHealthCheck:
+              command: !Join ['', ['until [ "$state" == "\"InService\"" ]; do ', '  state=$(aws
+                    --region ', !Ref 'AWS::Region', ' elb describe-instance-health ',
+                  '              --load-balancer-name ', !Ref 'ElasticLoadBalancer',
+                  '              --instances $(curl -s http://169.254.169.254/latest/meta-data/instance-id) ',
+                  '              --query InstanceStates[0].State); ', '  sleep 10; ',
+                  done]]
+    Properties:
+      KeyName: !Ref 'KeyName'
+      ImageId: !FindInMap [AWSRegionArch2AMI, !Ref 'AWS::Region', !FindInMap [AWSInstanceType2Arch,
+          !Ref 'InstanceType', Arch]]
+      InstanceType: !Ref 'InstanceType'
+      SecurityGroups: [!Ref 'InstanceSecurityGroup']
+      BlockDeviceMappings:
+      - DeviceName: "/dev/xvda"
+        Ebs:
+          VolumeSize: "60"
+          VolumeType: "io1"
+          Iops: "1000"
+      IamInstanceProfile: !Ref 'ParityInstanceProfile'
+      UserData:
+        "Fn::Base64":
+           !Sub |
+             #!/bin/bash
+             yum update -y aws-cfn-bootstrap
+             /opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource LaunchConfig --configsets full_install --region ${AWS::Region}
+             /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource ParityGroup --region ${AWS::Region}
+  ElasticLoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      AvailabilityZones: !GetAZs ''
+      CrossZone: 'true'
+      Listeners:
+      - LoadBalancerPort: '80'
+        InstancePort: '8545'
+        Protocol: HTTP
+      - LoadBalancerPort: '443'
+        InstancePort: '8545'
+        Protocol: HTTPS
+        InstanceProtocol: HTTP
+        SSLCertificateId: !Ref 'SSLCertificateID'
+        PolicyNames: []
+      HealthCheck:
+        Target: TCP:8545
+        HealthyThreshold: '3'
+        UnhealthyThreshold: '5'
+        Interval: '30'
+        Timeout: '5'
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access and HTTP access on the configured port
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: !Ref 'SSHLocation'
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '30303'
+        ToPort: '30303'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: udp
+        FromPort: '30303'
+        ToPort: '30303'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '8545'
+        ToPort: '8545'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+  ParityInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref 'DescribeHealthRole']
+  DNSForELB:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref 'HostedZoneID'
+      RecordSets:
+      - Name: !Join [ '', [ !Ref 'EthereumNetwork', '.' , !Ref 'ApexDomain'] ]
+        Type: A
+        AliasTarget:
+          HostedZoneId: !Ref 'ELBHostedZoneID'
+          DNSName: !GetAtt ElasticLoadBalancer.DNSName
+  DescribeHealthRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ec2.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: describe-instance-health-policy
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action: ['elasticloadbalancing:DescribeInstanceHealth']
+            Resource: '*'
+Outputs:
+  URL:
+    Description: parity ELB URL
+    Value: !Join ['', ['http://', !GetAtt [ElasticLoadBalancer, DNSName]]]
