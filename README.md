@@ -6,7 +6,7 @@ By default this launches on the ropsten network with the following default comma
 command: !Join [ '', [ 'nohup /usr/local/bin/parity --chain ', !Ref 'EthereumNetwork', ' --jsonrpc-hosts all --jsonrpc-interface all --jsonrpc-apis all --snapshot-peers=25 --max-peers=10 --min-peers=25 </dev/null > /var/log/parity.log 2>&1 &' ] ]
 ````
 
-If you wish to use the toml config file for parity adjust the command to use the commented out line.
+If you wish to use the toml config file for parity. Adjust the command to use the commented out line.
 
 ````text
 #command below should work when using toml config
