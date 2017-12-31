@@ -14,7 +14,7 @@ Parameters:
   SSLCertificateID:
     Description: The SSL Certificate ARN from certificate manager of account
     Type: String
-    Default: arn:aws:acm:us-east-1:
+    Default: arn
   HostedZoneID:
     Description: The ID of the Hosted Zone for the domain from route 53 hosted zone
     Type: String
